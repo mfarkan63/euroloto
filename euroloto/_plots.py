@@ -323,3 +323,115 @@ def companions_bar_all(
     ax.legend(fontsize=10)
     fig.tight_layout()
     return fig
+
+
+def affinity_heatmap(
+    filtered_df: pd.DataFrame,
+    cols: List[str],
+    fixed: List[int],
+    config: dict,
+    n_top: int = 15,
+    min_affinity: int = 1,
+    metric: str = 'count',   # 'count' | 'lift'
+    step_label: str = '',
+) -> plt.Figure:
+    """
+    Conditional co-occurrence heatmap among companion candidates in draws
+    that already contain `fixed`.
+
+    metric='count' : raw co-occurrence count inside filtered draws.
+    metric='lift'  : lift = P(x∩y | fixed) / (P(x|fixed) × P(y|fixed))
+                     Values > 1 mean x and y appear together more than expected.
+    min_affinity   : cells below this value are masked (shown in grey).
+    """
+    if filtered_df.empty:
+        fig, ax = plt.subplots(figsize=(5, 3))
+        ax.text(0.5, 0.5, 'Aucun tirage trouvé', ha='center', va='center', fontsize=11)
+        ax.axis('off')
+        return fig
+
+    # Top companions by frequency inside filtered draws
+    _, comp = analyzer.companions(filtered_df, cols, fixed, n_top=n_top)
+    if comp.empty or len(comp) < 2:
+        fig, ax = plt.subplots(figsize=(5, 3))
+        ax.text(0.5, 0.5, f'Trop peu de compagnons\n({len(filtered_df)} tirages)',
+                ha='center', va='center', fontsize=11)
+        ax.axis('off')
+        return fig
+
+    top_nums = [n for n in comp.index if n not in fixed]
+
+    # Build conditional co-occurrence matrix within filtered draws
+    cooc = analyzer.cooccurrence_matrix(filtered_df, cols)
+    valid = [n for n in top_nums if n in cooc.index]
+    if len(valid) < 2:
+        fig, ax = plt.subplots(figsize=(5, 3))
+        ax.text(0.5, 0.5, 'Matrice insuffisante', ha='center', va='center', fontsize=11)
+        ax.axis('off')
+        return fig
+
+    sub = cooc.loc[valid, valid].copy().astype(float)
+    np.fill_diagonal(sub.values, np.nan)   # diagonal = meaningless
+
+    if metric == 'lift':
+        # Lift between x and y, conditional on fixed:
+        # lift(x,y) = P(x∩y|fixed) / (P(x|fixed) × P(y|fixed))
+        n_f = len(filtered_df)
+        marginal = comp['frequence'].reindex(valid, fill_value=0) / n_f
+        for i, a in enumerate(valid):
+            for j, b in enumerate(valid):
+                if i == j:
+                    continue
+                denom = marginal.get(a, 0) * marginal.get(b, 0)
+                if denom > 0 and not np.isnan(sub.iloc[i, j]):
+                    sub.iloc[i, j] = (sub.iloc[i, j] / n_f) / denom
+                else:
+                    sub.iloc[i, j] = np.nan
+        cbar_label = 'Lift conditionnel (>1 = affinité réelle)'
+        fmt = '.2f'
+        vmin, vmax = 0, None
+    else:
+        cbar_label = f'Co-occurrences (dans {len(filtered_df)} tirages avec {fixed})'
+        fmt = '.0f'
+        vmin = None
+
+    if min_affinity > 0:
+        threshold = min_affinity if metric == 'count' else 1.0
+        sub[sub < threshold] = np.nan
+        has_valid = sub.notna().any(axis=1)
+        sub = sub.loc[has_valid, has_valid]
+
+    if sub.empty or sub.shape[0] < 2:
+        fig, ax = plt.subplots(figsize=(5, 3))
+        threshold_display = min_affinity if metric == 'count' else '1.0 (lift)'
+        ax.text(0.5, 0.5, f'Aucune paire ≥ {threshold_display}\n→ réduire min_affinity',
+                ha='center', va='center', fontsize=11)
+        ax.axis('off')
+        return fig
+
+    # Axis labels: number + frequency in parentheses
+    freq_map = comp['frequence'].to_dict() if 'frequence' in comp.columns else {}
+    labels = [f"{n}  (×{freq_map.get(n, '?')})" for n in sub.index]
+
+    size = max(6, len(sub) * 0.7)
+    fig, ax = plt.subplots(figsize=(size + 1, size))
+    sns.heatmap(
+        sub, annot=True, fmt=fmt, cmap='YlOrRd', ax=ax,
+        linewidths=0.5, mask=sub.isna(),
+        cbar_kws={'label': cbar_label, 'shrink': 0.8},
+        annot_kws={'size': 9},
+        xticklabels=labels, yticklabels=labels,
+        vmin=vmin,
+    )
+    fixed_str = ' + '.join(str(n) for n in sorted(fixed))
+    metric_str = 'Lift conditionnel' if metric == 'lift' else 'Co-occurrences conditionnelles'
+    threshold_str = f'  ·  seuil ≥ {min_affinity}' if min_affinity > 0 else ''
+    ax.set_title(
+        f'{step_label}{metric_str} avec [{fixed_str}]\n'
+        f'{len(filtered_df)} tirages  ·  {len(sub)} numéros{threshold_str}',
+        fontsize=12, fontweight='bold', pad=12,
+    )
+    ax.tick_params(axis='both', labelsize=9, rotation=0)
+    ax.set_xticklabels(ax.get_xticklabels(), rotation=45, ha='right')
+    fig.tight_layout()
+    return fig

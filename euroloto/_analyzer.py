@@ -191,9 +191,18 @@ def companions(
     freq = pd.Series(comp_nums).value_counts()
     ls = last_seen(filtered, cols)
 
+    # Lift = conditional probability / marginal probability
+    # Values > 1 mean the number appears more often with `fixed` than by chance
+    freq_total = frequency(df, cols)
+    n_total = len(df)
+    marginal = freq_total.reindex(freq.index, fill_value=1) / n_total
+    conditional = freq / n_filtered
+    lift = (conditional / marginal).round(2)
+
     result = pd.DataFrame({
         'frequence': freq,
         'pct': (freq / n_filtered * 100).round(1),
+        'lift': lift,
         'retard': ls.reindex(freq.index, fill_value=n_filtered),
     }).head(n_top)
 

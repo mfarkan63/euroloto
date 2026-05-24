@@ -272,9 +272,15 @@ def deep_companions(
     fixed: List[int],
     kind: str = 'euro',
     n_top: int = 5,
+    k_seeds: int = 1,
 ) -> dict:
     """
     Iterative companion search: from a fixed pair to a full 5-number combination.
+
+    k_seeds: number of most recent seed draws to use for the FILTRÉE filter.
+             k_seeds=1 (default) = your manual procedure.
+             k_seeds=3..10 = more robust signal, less noise.
+             The union of companions across K seed draws is used as the filter set.
 
     At each step, the function compares two methods side by side:
     - GLOBAL   : all draws containing the current fixed set
@@ -312,18 +318,31 @@ def deep_companions(
         print(f"Aucun tirage contenant {fixed} dans {cfg_seed['name']}.")
         return {}
 
-    seed_row        = seed_draws.iloc[-1]
-    seed_date       = seed_row[date_col].date()
-    seed_draw_full  = sorted(seed_row[cols_seed].astype(int).tolist())
-    seed_companions = sorted(n for n in seed_draw_full if n not in fixed)
+    # Use the K most recent seed draws — union of their companions as the filter set
+    k = max(1, k_seeds)
+    recent_seeds = seed_draws.tail(k)
+    seed_companions_set: set = set()
+    for _, row in recent_seeds.iterrows():
+        for n in row[cols_seed].astype(int).tolist():
+            if n not in fixed:
+                seed_companions_set.add(n)
+    seed_companions = sorted(seed_companions_set)
+
+    # For display: show each seed draw
+    seed_row       = recent_seeds.iloc[-1]
+    seed_date      = seed_row[date_col].date()
+    seed_draw_full = sorted(seed_row[cols_seed].astype(int).tolist())
 
     game_label = 'Loto + EuroMillions' if kind == 'all' else cfg_seed['name']
     print(f"\n{'='*65}")
-    print(f"  deep_companions {fixed} — {game_label}")
+    print(f"  deep_companions {fixed} — {game_label}  (k_seeds={k})")
     print(f"{'='*65}")
-    print(f"\nTirage graine ({cfg_seed['name']}) :")
-    print(f"  {seed_date}  →  {seed_draw_full}")
-    print(f"  Compagnons graine : {seed_companions}")
+    print(f"\nTirages graines ({cfg_seed['name']}) :")
+    for _, row in recent_seeds.iterrows():
+        d = row[date_col].date()
+        draw = sorted(row[cols_seed].astype(int).tolist())
+        print(f"  {d}  →  {draw}")
+    print(f"  Compagnons graine (union) : {seed_companions}")
 
     # --- Helper: get companions for current path ---
     def _get_companions(path, min_one_of=None):
@@ -445,6 +464,82 @@ def deep_companions(
         'combo_global':     path_global,
         'combo_filtered':   path_filtered,
     }
+
+
+def plot_deep_companions(
+    fixed: List[int],
+    kind: str = 'euro',
+    n_top: int = 15,
+    min_affinity: int = 1,
+    metric: str = 'count',
+) -> List:
+    """
+    Cascade of affinity heatmaps: one figure per step (pair → triplet → quadruplet).
+
+    At each step, the heatmap shows the conditional co-occurrence matrix among
+    the top companion candidates in draws containing the current fixed set.
+    The top candidate is auto-selected (by frequency) to advance to the next step.
+
+    metric='count' : raw co-occurrence count (default).
+    metric='lift'  : lift = P(x∩y|fixed) / (P(x|fixed)×P(y|fixed))
+                     Values > 1 = genuine affinity beyond base rates.
+    min_affinity   : pairs below this value are masked (white cells).
+                     For lift, threshold is automatically set to 1.0.
+
+    Returns a list of matplotlib Figures (one per cascade step).
+    """
+    from euroloto._analyzer import companions as _comp
+    from euroloto._plots import affinity_heatmap
+
+    fixed = sorted(fixed)
+    figures = []
+
+    def _get_filtered(path):
+        if kind == 'all':
+            df_l, cfg_l = _s.require('loto')
+            df_e, cfg_e = _s.require('euro')
+            mask_l = pd.Series([True] * len(df_l), index=df_l.index)
+            mask_e = pd.Series([True] * len(df_e), index=df_e.index)
+            for n in path:
+                mask_l &= (df_l[cfg_l['main_cols']] == n).any(axis=1)
+                mask_e &= (df_e[cfg_e['main_cols']] == n).any(axis=1)
+            # Combine on common columns
+            COMMON = ['date_de_tirage', 'boule_1', 'boule_2', 'boule_3', 'boule_4', 'boule_5']
+            fl = df_l[mask_l][COMMON].copy()
+            fe = df_e[mask_e][COMMON].copy()
+            return pd.concat([fl, fe], ignore_index=True), COMMON[1:], cfg_l
+        else:
+            df, cfg = _s.require(kind)
+            mask = pd.Series([True] * len(df), index=df.index)
+            for n in path:
+                mask &= (df[cfg['main_cols']] == n).any(axis=1)
+            return df[mask].copy(), cfg['main_cols'], cfg
+
+    current_fixed = list(fixed)
+    n_main = len(_s.require('loto' if kind == 'all' else kind)[1]['main_cols'])
+
+    for step_idx in range(len(fixed), n_main):
+        step_num = step_idx - len(fixed) + 1
+        ordinal = {1: '1er', 2: '2ème', 3: '3ème'}.get(step_num, f'{step_num}ème')
+        step_label = f'Étape {step_num} — {ordinal} numéro  |  '
+
+        filtered_df, cols, cfg = _get_filtered(current_fixed)
+
+        fig = affinity_heatmap(
+            filtered_df, cols, current_fixed, cfg,
+            n_top=n_top, min_affinity=min_affinity,
+            metric=metric, step_label=step_label,
+        )
+        figures.append(fig)
+
+        # Advance with top companion by frequency
+        _, comp = _comp(filtered_df, cols, current_fixed, n_top=1)
+        if comp.empty:
+            break
+        best = comp.index[0]
+        current_fixed = sorted(current_fixed + [best])
+
+    return figures
 
 
 # ---------------------------------------------------------------------------
