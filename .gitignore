@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.ipynb_checkpoints/
+
+# Generated outputs (reproducible from data)
+charts/
+reports/
+
+# Backup files
+*.bak
+
+# Excel temporary lock files
+~$*

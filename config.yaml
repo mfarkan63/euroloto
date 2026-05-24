@@ -1,0 +1,10 @@
+# euroloto configuration — edit file paths to match your setup
+# data_dir is optional: defaults to the directory containing this file
+
+loto:
+  file: resultat-loto.xlsm
+  sheet: Feuil1
+
+euro:
+  file: resultat-euro.xlsm
+  sheet: Feuil1
