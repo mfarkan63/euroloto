@@ -1,10 +1,11 @@
-# euroloto configuration — edit file paths to match your setup
-# data_dir is optional: defaults to the directory containing this file
+# euroloto configuration
+# Run euroloto.build_tirage() once to create tirage.xlsx from FDJ archives.
+# Then use euroloto.update_tirage() to append new draws.
+
+file: tirage.xlsx    # single file, two sheets
 
 loto:
-  file: resultat-loto.xlsm
-  sheet: Feuil1
+  sheet: loto
 
 euro:
-  file: resultat-euro.xlsm
-  sheet: Feuil1
+  sheet: euromillion

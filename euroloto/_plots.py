@@ -325,6 +325,89 @@ def companions_bar_all(
     return fig
 
 
+def combinations_histogram(
+    combos: 'pd.DataFrame',
+    reference: float,
+    fixed: List[int],
+    config: dict,
+) -> plt.Figure:
+    """
+    Bar chart of the top combinations selected by top_combinations().
+
+    Each bar = one combination; height = prob_pct (relative probability).
+    The dashed orange line = *reference* (mean prob_pct over all enumerated
+    candidates — the baseline to beat).
+
+    Parameters
+    ----------
+    combos    : DataFrame returned by top_combinations() (columns: rank, main,
+                score, prob_pct)
+    reference : mean score over all enumerated candidates (baseline)
+    fixed     : the fixed numbers (for title)
+    config    : game config dict (for game name and n_to_fill label)
+    """
+    if combos.empty:
+        fig, ax = plt.subplots(figsize=(6, 3))
+        ax.text(0.5, 0.5, 'Aucune combinaison generee', ha='center', va='center', fontsize=11)
+        ax.axis('off')
+        return fig
+
+    n = len(combos)
+    scores = combos['score'].values
+    prob_pcts = combos['prob_pct'].values
+
+    # Color based on how much the score exceeds the reference baseline
+    colors = [
+        '#e74c3c' if s > reference * 1.10 else
+        '#3498db' if s < reference * 0.90 else
+        '#95a5a6'
+        for s in scores
+    ]
+
+    def _short(main: list) -> str:
+        return '-'.join(str(m) for m in sorted(main))
+
+    x_labels = [_short(row['main']) for _, row in combos.iterrows()]
+    x_pos = np.arange(n)
+
+    fig, ax = plt.subplots(figsize=(max(10, n * 1.2), 6))
+    bars = ax.bar(x_pos, scores, color=colors, edgecolor='white', linewidth=0.5, width=0.7)
+
+    # Annotate each bar with prob_pct
+    y_top = max(scores) if len(scores) else 1.0
+    for bar, pct in zip(bars, prob_pcts):
+        ax.text(
+            bar.get_x() + bar.get_width() / 2,
+            bar.get_height() + y_top * 0.01,
+            f'{pct:.5f}%',
+            ha='center', va='bottom', fontsize=7.5, color='#2c3e50',
+        )
+
+    ax.axhline(reference, color='#f39c12', linestyle='--', linewidth=2.0,
+               label=f'Reference (moy. tous candidats) : {reference:.4f}')
+
+    ax.set_xticks(x_pos)
+    ax.set_xticklabels(x_labels, rotation=35, ha='right', fontsize=8)
+    ax.set_xlabel('Combinaison', fontsize=12)
+    ax.set_ylabel('Score lift conditionnel moyen', fontsize=12)
+    fixed_str = ' + '.join(str(fn) for fn in sorted(fixed))
+    ax.set_title(
+        f'{config["name"]} - Top {n} combinaisons depuis [{fixed_str}]\n'
+        f'Lift conditionnel moyen  |  diversite inter-combinaisons maximisee (Jaccard)',
+        fontsize=13, fontweight='bold',
+    )
+    legend = [
+        mpatches.Patch(color='#e74c3c', label='Au-dessus de la reference (+10%)'),
+        mpatches.Patch(color='#3498db', label='En dessous de la reference (-10%)'),
+        mpatches.Patch(color='#95a5a6', label='Dans la moyenne'),
+        plt.Line2D([0], [0], color='#f39c12', linestyle='--', linewidth=2,
+                   label=f'Reference : {reference:.4f}'),
+    ]
+    ax.legend(handles=legend, loc='upper right', fontsize=9)
+    fig.tight_layout()
+    return fig
+
+
 def affinity_heatmap(
     filtered_df: pd.DataFrame,
     cols: List[str],

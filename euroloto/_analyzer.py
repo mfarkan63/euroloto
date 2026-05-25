@@ -3,7 +3,7 @@ Statistical analysis functions.
 All are pure (no side effects) — take DataFrames and return pandas/numpy objects.
 """
 from itertools import combinations
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -268,3 +268,151 @@ def top_pairs(df: pd.DataFrame, cols: List[str], n: int = 20) -> pd.DataFrame:
         .head(n)
         .reset_index(drop=True)
     )
+
+
+def top_combinations(
+    df: pd.DataFrame,
+    cols: List[str],
+    fixed: List[int],
+    n_top: int = 10,
+    n_candidates: int = 30,
+) -> Tuple[pd.DataFrame, float]:
+    """
+    Enumerate the most promising combinations starting from `fixed` numbers.
+
+    Algorithm
+    ---------
+    1. Filter draws that contain every number in `fixed`.
+    2. Rank companion numbers by conditional frequency.
+    3. Take the top `n_candidates` companions and enumerate all
+       C(n_candidates, n_to_fill) complete combinations.
+    4. Score each combination by **mean pairwise conditional lift**:
+       ``score = mean over all pairs (a,b) of P(a∩b|fixed) / (P(a|fixed)×P(b|fixed))``
+    5. Select the top `n_top` combinations using **greedy Jaccard diversity**
+       so that the returned set has maximum inter-combination variety
+       (avoids returning near-duplicate combinations).
+    6. Normalize scores to probability percentages (sum = 100 % over all
+       enumerated candidates).
+
+    Parameters
+    ----------
+    df            : full draw DataFrame
+    cols          : main ball columns
+    fixed         : the 2 (or more) numbers already chosen
+    n_top         : how many combinations to return
+    n_candidates  : how many top companion numbers to consider (C(n_candidates, n_to_fill)
+                    combinations are enumerated; 30 gives 4 060 triplets for 5-ball games)
+
+    Returns
+    -------
+    combos_df : DataFrame with columns ``main, score, prob_pct, diversity_rank``
+    reference : mean score over **all** enumerated candidates — the baseline to beat
+    """
+    from itertools import combinations as _comb
+
+    fixed = sorted(fixed)
+    n_to_fill = len(cols) - len(fixed)
+    if n_to_fill <= 0:
+        return pd.DataFrame(), 0.0
+
+    # ------------------------------------------------------------------
+    # 1. Filtered draws
+    # ------------------------------------------------------------------
+    mask = pd.Series([True] * len(df), index=df.index)
+    for num in fixed:
+        mask &= (df[cols] == num).any(axis=1)
+    filtered = df[mask]
+    n_f = len(filtered)
+
+    if n_f < 5:
+        return pd.DataFrame(), 0.0
+
+    # ------------------------------------------------------------------
+    # 2. Companion frequencies inside filtered draws
+    # ------------------------------------------------------------------
+    flat = filtered[cols].values.flatten().astype(int)
+    comp_series = pd.Series([n for n in flat if n not in fixed]).value_counts()
+
+    candidates = [c for c in comp_series.nlargest(n_candidates).index if c not in fixed]
+    if len(candidates) < n_to_fill:
+        return pd.DataFrame(), 0.0
+
+    # Conditional probabilities P(x | fixed)
+    p_cond: Dict[int, float] = {n: comp_series.get(n, 0) / n_f for n in candidates}
+    for n in fixed:
+        p_cond[n] = 1.0   # fixed numbers always present
+
+    # ------------------------------------------------------------------
+    # 3. Co-occurrence matrix inside filtered draws
+    # ------------------------------------------------------------------
+    cooc_f = cooccurrence_matrix(filtered, cols)
+
+    def _mean_pairwise_lift(complement: tuple) -> float:
+        """Mean conditional lift over all C(5,2) pairs."""
+        full = fixed + list(complement)
+        lifts: List[float] = []
+        for a, b in _comb(full, 2):
+            pa = p_cond.get(a, 0.0)
+            pb = p_cond.get(b, 0.0)
+            denom = pa * pb
+            if denom <= 0 or a not in cooc_f.index or b not in cooc_f.columns:
+                continue
+            p_ab = cooc_f.loc[a, b] / n_f
+            lifts.append(p_ab / denom)
+        return float(np.mean(lifts)) if lifts else 0.0
+
+    # ------------------------------------------------------------------
+    # 4. Score all C(n_candidates, n_to_fill) combinations
+    # ------------------------------------------------------------------
+    all_combos = list(_comb(candidates, n_to_fill))
+    rows = [
+        {
+            'main': sorted(fixed + list(combo)),
+            '_key': tuple(sorted(fixed + list(combo))),
+            'score': round(_mean_pairwise_lift(combo), 6),
+        }
+        for combo in all_combos
+    ]
+    combos_df = pd.DataFrame(rows).sort_values('score', ascending=False).reset_index(drop=True)
+
+    # Reference = mean over ALL enumerated candidates
+    reference = float(combos_df['score'].mean())
+
+    # Normalize to probability percentages (proportional to score)
+    total_score = combos_df['score'].sum()
+    combos_df['prob_pct'] = (
+        (combos_df['score'] / total_score * 100).round(6) if total_score > 0 else 0.0
+    )
+
+    # ------------------------------------------------------------------
+    # 5. Greedy Jaccard diversity selection
+    # ------------------------------------------------------------------
+    def _jaccard_dist(set_a: set, set_b: set) -> float:
+        inter = len(set_a & set_b)
+        union = len(set_a | set_b)
+        return 1.0 - inter / union if union > 0 else 0.0
+
+    selected_idx: List[int] = [0]
+    selected_sets: List[set] = [set(combos_df.loc[0, 'main'])]
+
+    for _ in range(n_top - 1):
+        best_i: Optional[int] = None
+        best_min_dist = -1.0
+        for i in combos_df.index:
+            if i in selected_idx:
+                continue
+            s = set(combos_df.loc[i, 'main'])
+            min_dist = min(_jaccard_dist(s, ss) for ss in selected_sets)
+            if min_dist > best_min_dist:
+                best_min_dist = min_dist
+                best_i = i
+        if best_i is None:
+            break
+        selected_idx.append(best_i)
+        selected_sets.append(set(combos_df.loc[best_i, 'main']))
+
+    result = combos_df.loc[selected_idx, ['main', 'score', 'prob_pct']].copy()
+    result.insert(0, 'rank', range(1, len(result) + 1))
+    result = result.reset_index(drop=True)
+
+    return result, reference

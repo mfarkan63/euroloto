@@ -27,9 +27,20 @@ from euroloto._config import GAMES
 
 def init(config_path: Union[str, Path] = 'config.yaml') -> None:
     """
-    Load data from the paths declared in config.yaml.
+    Load draw data from the paths declared in config.yaml.
 
-    config.yaml format:
+    Two supported formats:
+
+    New (single XLSX, two sheets)::
+
+        file: tirage.xlsx
+        loto:
+          sheet: loto
+        euro:
+          sheet: euromillion
+
+    Legacy (separate files per game)::
+
         loto:
           file: resultat-loto.xlsm
           sheet: Feuil1
@@ -37,7 +48,7 @@ def init(config_path: Union[str, Path] = 'config.yaml') -> None:
           file: resultat-euro.xlsm
           sheet: Feuil1
 
-    The YAML can contain an optional `data_dir` key (default: directory of config.yaml).
+    An optional ``data_dir`` key overrides the directory of config.yaml.
     """
     try:
         import yaml
@@ -61,15 +72,28 @@ def init(config_path: Union[str, Path] = 'config.yaml') -> None:
     _s.configs.clear()
     _s.invalidate()
 
+    # Top-level 'file' key = shared XLSX (new format)
+    shared_file = cfg.get('file')
+
     for kind in ('loto', 'euro'):
         if kind not in cfg:
             raise ValueError(f"Clé '{kind}' manquante dans {cfg_path}")
         entry = cfg[kind]
-        game_cfg = dict(_GAMES[kind])  # copy so we can augment
-        game_cfg['file'] = entry['file']
-        game_cfg['sheet'] = entry.get('sheet', 'Feuil1')
+        game_cfg = dict(_GAMES[kind])   # copy so we can augment
+
+        # Resolve file and sheet
+        file_ = entry.get('file', shared_file)
+        if not file_:
+            raise ValueError(
+                f"Ni 'file' au niveau racine ni '{kind}.file' trouvé dans {cfg_path}. "
+                "Créez tirage.xlsx avec euroloto.build_tirage() et ajoutez 'file: tirage.xlsx' au YAML."
+            )
+        sheet_ = entry.get('sheet', 'Feuil1')
+
+        game_cfg['file'] = file_
+        game_cfg['sheet'] = sheet_
         _s.configs[kind] = game_cfg
-        _s.dfs[kind] = _load(kind, data_dir, entry['file'], entry.get('sheet', 'Feuil1'))
+        _s.dfs[kind] = _load(kind, data_dir, file_, sheet_)
 
     print(f"euroloto initialisé depuis {cfg_path}")
     info()
@@ -85,7 +109,115 @@ def info() -> None:
         date_col = cfg['date_col']
         d_min = df[date_col].min().date()
         d_max = df[date_col].max().date()
-        print(f"  {cfg['name']:16s} {len(df):5d} tirages  ({d_min} → {d_max})")
+        print(f"  {cfg['name']:16s} {len(df):5d} tirages  ({d_min} -> {d_max})")
+
+
+# ---------------------------------------------------------------------------
+# FDJ data download
+# ---------------------------------------------------------------------------
+
+def build_tirage(
+    output: Union[str, Path] = 'tirage.xlsx',
+    verbose: bool = True,
+) -> None:
+    """
+    Download **all** historical FDJ draw archives and write ``tirage.xlsx``.
+
+    Creates two sheets: ``loto`` and ``euromillion``.
+    The file is placed at *output* (default: current directory).
+
+    This is a one-time operation (~15–30 s, ~11 HTTP requests).
+    Afterwards use :func:`update_tirage` for incremental refreshes.
+    """
+    from euroloto._fetcher import fetch_all
+
+    output = Path(output).resolve()
+    if verbose:
+        print(f"Construction de {output} depuis les archives FDJ...\n")
+
+    sheets: dict = {}
+    for kind in ('loto', 'euro'):
+        sheet = kind if kind == 'loto' else 'euromillion'
+        if verbose:
+            print(f"-- {kind.upper()} -----------------------------------------")
+        df = fetch_all(kind, verbose=verbose)
+        if verbose:
+            d_min = df['date_de_tirage'].min().date()
+            d_max = df['date_de_tirage'].max().date()
+            print(f"  Total : {len(df):,} tirages  ({d_min} -> {d_max})\n")
+        sheets[sheet] = df
+
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        for sheet, df in sheets.items():
+            df.to_excel(writer, sheet_name=sheet, index=False)
+
+    if verbose:
+        print(f"[OK] Fichier cree : {output}")
+
+
+def update_tirage(
+    xlsx_path: Union[str, Path] = 'tirage.xlsx',
+    verbose: bool = True,
+) -> None:
+    """
+    Append new FDJ draws to an existing ``tirage.xlsx``.
+
+    Only the most recent archive ZIP is downloaded per game, so this is fast
+    (~2 HTTP requests).  Draws already present (by date) are skipped.
+
+    If the package has been initialised via :func:`init`, call
+    :func:`init` again afterwards to reload the updated data.
+    """
+    import warnings
+    from euroloto._fetcher import fetch_latest
+
+    xlsx_path = Path(xlsx_path).resolve()
+    if not xlsx_path.exists():
+        print(f"Fichier '{xlsx_path}' introuvable.  Créez-le d'abord avec build_tirage().")
+        return
+
+    if verbose:
+        print(f"Mise a jour de {xlsx_path}...\n")
+
+    updated: dict = {}
+    for kind in ('loto', 'euro'):
+        sheet = kind if kind == 'loto' else 'euromillion'
+        if verbose:
+            print(f"-- {kind.upper()} -----------------------------------------")
+
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore')
+            existing = pd.read_excel(xlsx_path, sheet_name=sheet, engine='openpyxl')
+        existing['date_de_tirage'] = pd.to_datetime(existing['date_de_tirage'], errors='coerce')
+        last_date = existing['date_de_tirage'].max()
+        if verbose:
+            print(f"  Dernière date connue : {last_date.date()}")
+
+        new_df = fetch_latest(kind, verbose=verbose)
+        new_df['date_de_tirage'] = pd.to_datetime(new_df['date_de_tirage'], errors='coerce')
+        new_rows = new_df[new_df['date_de_tirage'] > last_date]
+
+        if new_rows.empty:
+            if verbose:
+                print(f"  -> Deja a jour.\n")
+            updated[sheet] = existing
+        else:
+            combined = (
+                pd.concat([existing, new_rows], ignore_index=True)
+                .sort_values('date_de_tirage')
+                .drop_duplicates(subset=['date_de_tirage'])
+                .reset_index(drop=True)
+            )
+            updated[sheet] = combined
+            if verbose:
+                print(f"  -> {len(new_rows)} nouveau(x) tirage(s) ajoute(s).\n")
+
+    with pd.ExcelWriter(xlsx_path, engine='openpyxl') as writer:
+        for sheet, df in updated.items():
+            df.to_excel(writer, sheet_name=sheet, index=False)
+
+    if verbose:
+        print(f"[OK] Fichier mis a jour : {xlsx_path}")
 
 
 # ---------------------------------------------------------------------------
@@ -219,6 +351,60 @@ def _companions_all(fixed: List[int], n_top: int) -> pd.DataFrame:
     combined['total'] = combined['loto'] + combined['euro']
     combined['pct_%'] = (combined['total'] / n_total * 100).round(1) if n_total > 0 else 0.0
     return combined.sort_values('total', ascending=False).head(n_top)[['total', 'pct_%', 'loto', 'euro']]
+
+
+# ---------------------------------------------------------------------------
+# Top combinations
+# ---------------------------------------------------------------------------
+
+def top_combinations(
+    fixed: List[int],
+    kind: str = 'euro',
+    n_top: int = 10,
+    n_candidates: int = 30,
+) -> tuple:
+    """
+    Return the N most probable and diverse combinations starting from `fixed`.
+
+    Uses conditional lift scoring and greedy Jaccard diversity selection so that
+    the returned set is both high-quality and spread out (no near-duplicates).
+
+    Parameters
+    ----------
+    fixed        : the 2 (or more) numbers already chosen
+    kind         : 'loto' | 'euro'
+    n_top        : number of combinations to return
+    n_candidates : top companion candidates to enumerate from
+                   (C(n_candidates, n_to_fill) combinations are scored)
+
+    Returns
+    -------
+    (combos_df, reference)
+      combos_df : DataFrame with columns ``rank, main, score, prob_pct``
+      reference : mean score over all enumerated candidates (baseline)
+    """
+    from euroloto._analyzer import top_combinations as _tc
+    df, cfg = _s.require(kind)
+    return _tc(df, cfg['main_cols'], sorted(fixed), n_top=n_top, n_candidates=n_candidates)
+
+
+def plot_combinations(
+    fixed: List[int],
+    combos: 'pd.DataFrame',
+    reference: float,
+    kind: str = 'euro',
+):
+    """
+    Histogram of the top combinations returned by :func:`top_combinations`.
+
+    Each bar = one combination, height = relative probability (%).
+    Dashed line = reference baseline (mean over all enumerated candidates).
+
+    Returns a matplotlib Figure.
+    """
+    _, cfg = _s.require(kind)
+    from euroloto._plots import combinations_histogram
+    return combinations_histogram(combos, reference, sorted(fixed), cfg)
 
 
 # ---------------------------------------------------------------------------

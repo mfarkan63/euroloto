@@ -33,11 +33,13 @@ class LotoPredictor:
         freq = analyzer.frequency(self.df, main_cols)
         self.main_freq = freq.reindex(self.main_nums, fill_value=0)
 
-        freq_b = analyzer.frequency(self.df, bonus_cols)
+        # Bonus: drop rows with NaN bonus (old Loto format before 2008)
+        bonus_df = self.df.dropna(subset=bonus_cols)
+        freq_b = analyzer.frequency(bonus_df, bonus_cols)
         self.bonus_freq = freq_b.reindex(self.bonus_nums, fill_value=0)
 
         self.main_last = analyzer.last_seen(self.df, main_cols).reindex(self.main_nums, fill_value=n)
-        self.bonus_last = analyzer.last_seen(self.df, bonus_cols).reindex(self.bonus_nums, fill_value=n)
+        self.bonus_last = analyzer.last_seen(bonus_df, bonus_cols).reindex(self.bonus_nums, fill_value=n)
 
         gaps = analyzer.gap_analysis(self.df, main_cols)
         self.main_avg_gap = pd.Series(
