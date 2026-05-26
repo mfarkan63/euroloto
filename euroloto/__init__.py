@@ -1,5 +1,5 @@
 """
-euroloto — Analyse probabiliste et statistique du Loto et EuroMillions
+euroloto - Analyse probabiliste et statistique du Loto et EuroMillions
 ======================================================================
 
 Usage rapide :
@@ -462,7 +462,7 @@ def _predict_one(
 
 
 # ---------------------------------------------------------------------------
-# Deep companions — cascaded conditional co-occurrence
+# Deep companions - cascaded conditional co-occurrence
 # ---------------------------------------------------------------------------
 
 def deep_companions(
@@ -515,7 +515,7 @@ def deep_companions(
         print(f"Aucun tirage contenant {fixed} dans {cfg_seed['name']}.")
         return {}
 
-    # Use the K most recent seed draws — union of their companions as the filter set
+    # Use the K most recent seed draws - union of their companions as the filter set
     k = max(1, k_seeds)
     recent_seeds = seed_draws.tail(k)
     seed_companions_set: set = set()
@@ -532,7 +532,7 @@ def deep_companions(
 
     game_label = 'Loto + EuroMillions' if kind == 'all' else cfg_seed['name']
     print(f"\n{'='*65}")
-    print(f"  deep_companions {fixed} — {game_label}  (k_seeds={k})")
+    print(f"  deep_companions {fixed} - {game_label}  (k_seeds={k})")
     print(f"{'='*65}")
     print(f"\nTirages graines ({cfg_seed['name']}) :")
     for _, row in recent_seeds.iterrows():
@@ -577,7 +577,7 @@ def deep_companions(
 
         print(f"\n{'─'*65}")
         ordinal = {1:'1er', 2:'2ème', 3:'3ème'}.get(position, f'{position}ème')
-        print(f"ÉTAPE {step_num} — {ordinal} numéro")
+        print(f"ÉTAPE {step_num} - {ordinal} numéro")
 
         # GLOBAL: unconstrained companions for current best paths
         comp_g = _get_companions(path_global)
@@ -678,7 +678,7 @@ def plot_deep_companions(
     The top candidate is auto-selected (by frequency) to advance to the next step.
 
     metric='count' : raw co-occurrence count (default).
-    metric='lift'  : lift = P(x∩y|fixed) / (P(x|fixed)×P(y|fixed))
+    metric='lift'  : lift = P(xintery|fixed) / (P(x|fixed)×P(y|fixed))
                      Values > 1 = genuine affinity beyond base rates.
     min_affinity   : pairs below this value are masked (white cells).
                      For lift, threshold is automatically set to 1.0.
@@ -718,7 +718,7 @@ def plot_deep_companions(
     for step_idx in range(len(fixed), n_main):
         step_num = step_idx - len(fixed) + 1
         ordinal = {1: '1er', 2: '2ème', 3: '3ème'}.get(step_num, f'{step_num}ème')
-        step_label = f'Étape {step_num} — {ordinal} numéro  |  '
+        step_label = f'Étape {step_num} - {ordinal} numéro  |  '
 
         filtered_df, cols, cfg = _get_filtered(current_fixed)
 
@@ -795,7 +795,7 @@ def plot_overdue(kind: str):
 
 
 # =============================================================================
-#  Display helpers — rich notebook output  (show_* + pipeline)
+#  Display helpers - rich notebook output  (show_* + pipeline)
 #  Each function displays results inline (IPython-friendly) and returns data.
 # =============================================================================
 
@@ -842,7 +842,7 @@ def show_draws(kind: str, n: int = 8) -> pd.DataFrame:
     """Show the n most recent draws for 'loto' or 'euro'."""
     df, cfg = _s.require(kind)
     tail = df.tail(n)
-    print(f"{cfg['name']} — {len(df)} tirages  (dernier: {df[cfg['date_col']].max().date()})")
+    print(f"{cfg['name']} - {len(df)} tirages  (dernier: {df[cfg['date_col']].max().date()})")
     _disp(tail)
     return tail
 
@@ -854,7 +854,7 @@ def show_frequency(kind: str, label: str = 'main') -> pd.DataFrame:
     cols = cfg['main_cols'] if label == 'main' else cfg['bonus_cols']
     freq = _freq(df, cols).rename('apparitions')
     tag  = 'boules principales' if label == 'main' else 'numeros bonus'
-    print(f"\n{cfg['name']} — top 10 {tag} :")
+    print(f"\n{cfg['name']} - top 10 {tag} :")
     _disp(freq.nlargest(10).to_frame())
     _show_fig(plot_frequency(kind, label))
     return freq.to_frame()
@@ -866,7 +866,7 @@ def show_hot_cold(kind: str, n_recent: int = 50) -> pd.DataFrame:
     df, cfg = _s.require(kind)
     hc = _hc(df, cfg['main_cols'], n_recent)
     show_cols = [c for c in ['total_pct', 'recent_pct', 'delta'] if c in hc.columns]
-    print(f"\n{cfg['name']} — chaud/froid  ({n_recent} derniers tirages)")
+    print(f"\n{cfg['name']} - chaud/froid  ({n_recent} derniers tirages)")
     print("  >> CHAUDS :")
     print(hc[hc['statut'] == 'chaud'].head(5)[show_cols].to_string())
     print("  >> FROIDS :")
@@ -888,7 +888,7 @@ def show_stats(kind: str) -> dict:
     ss    = sum_stats(kind)
     eo    = even_odd(kind)
     cfg   = _s.configs[kind]
-    print(f"\n{cfg['name']} — tests d'uniformite sur les boules principales")
+    print(f"\n{cfg['name']} - tests d'uniformite sur les boules principales")
     print(f"  Chi2 : stat={chi2r['statistic']:.4f}  p={chi2r['pvalue']:.4f}"
           f"  -> {'OK uniforme' if chi2r['is_uniform'] else 'NON uniforme (p<0.05)'}")
     print(f"  KS   : stat={ksr['statistic']:.6f}  p={ksr['pvalue']:.4f}"
@@ -909,7 +909,7 @@ def show_sum(kind: str) -> pd.Series:
 def show_even_odd(kind: str) -> pd.DataFrame:
     """Even/odd count distribution table."""
     eo = even_odd(kind)
-    print(f"\n{_s.configs[kind]['name']} — distribution pair / impair :")
+    print(f"\n{_s.configs[kind]['name']} - distribution pair / impair :")
     _disp(eo)
     return eo
 
@@ -917,7 +917,7 @@ def show_even_odd(kind: str) -> pd.DataFrame:
 def show_overdue(kind: str, n: int = 20) -> pd.Series:
     """Top-n most overdue numbers + retard bar chart."""
     od = overdue(kind)
-    print(f"\n{_s.configs[kind]['name']} — top {n} numeros en retard :")
+    print(f"\n{_s.configs[kind]['name']} - top {n} numeros en retard :")
     _disp(od.head(n).rename('retard (tirages)').to_frame())
     _show_fig(plot_overdue(kind))
     return od
@@ -949,7 +949,7 @@ def show_companions(
 
     if kind == 'all':
         comp = _companions_all(fixed, n_top)
-        print(f"\nCompagnons de {fixed} — Loto + EuroMillions combines (top {n_top}) :")
+        print(f"\nCompagnons de {fixed} - Loto + EuroMillions combines (top {n_top}) :")
         _disp(_style_df(comp, {'total': 'Blues'}, {'pct_%': '{:.1f}%'}))
         _show_fig(plot_companions(fixed, kind='all', n_top=n_top))
         return comp
@@ -959,7 +959,7 @@ def show_companions(
     if comp.empty:
         print(f"Aucun tirage contient simultanement {fixed} dans {cfg['name']}.")
         return comp
-    print(f"\n{cfg['name']} — compagnons de {fixed}  ({len(filtered)} tirages, top {n_top}) :")
+    print(f"\n{cfg['name']} - compagnons de {fixed}  ({len(filtered)} tirages, top {n_top}) :")
     _disp(_style_df(
         comp,
         {'frequence': 'Blues', 'lift': 'RdYlGn'},
@@ -986,7 +986,7 @@ def show_combinations(
     2. Rank companion candidates by conditional frequency (top n_candidates).
     3. Enumerate all C(n_candidates, n_to_fill) complete combinations.
     4. Score each combination by **mean pairwise conditional lift**:
-         score = mean over all C(k,2) pairs (a,b) of P(a∩b|fixed) / (P(a|fixed)×P(b|fixed))
+         score = mean over all C(k,2) pairs (a,b) of P(ainterb|fixed) / (P(a|fixed)×P(b|fixed))
     5. Select the top n_top using **greedy Jaccard diversity**:
          - Each selected combo maximises its minimum Jaccard distance to already-selected
            combos, so the returned set covers the probability landscape without near-duplicates.
@@ -1000,7 +1000,7 @@ def show_combinations(
 
     Returns (combos_df, reference_score)
       reference_score = mean score over ALL C(n_candidates, n_to_fill) combinations
-                        — the random-baseline every selected combo must beat.
+                        - the random-baseline every selected combo must beat.
     """
     import itertools
     from euroloto._analyzer import top_combinations as _tc
@@ -1067,7 +1067,7 @@ def show_prediction(
     def _render(k: str, g_list: list) -> None:
         cfg_k = _s.configs[k]
         bl    = 'Etoiles' if k == 'euro' else 'Chance'
-        print(f"\n{cfg_k['name']} — {n} grilles | alpha={alpha} | fixes={fxd or 'aucun'}")
+        print(f"\n{cfg_k['name']} - {n} grilles | alpha={alpha} | fixes={fxd or 'aucun'}")
         rows = [{
             '#': i,
             f'Combinaison {k}  ([ ]=fixes)': _fmt_main(sorted(g['main']), fxd),
@@ -1102,11 +1102,11 @@ def pipeline(
 
     Steps
     -----
-    1. Compagnons             — frequency + conditional lift of each companion
-    2. Analyse profonde       — cascaded conditional co-occurrences (deep_companions)
-    3. Matrices d'affinite    — lift heatmaps at each cascade step
-    4. Combinaisons optimales — top n_top combos (lift x Jaccard diversity)
-    5. Grilles finales        — Monte Carlo weighted grilles with bonus numbers
+    1. Compagnons             - frequency + conditional lift of each companion
+    2. Analyse profonde       - cascaded conditional co-occurrences (deep_companions)
+    3. Matrices d'affinite    - lift heatmaps at each cascade step
+    4. Combinaisons optimales - top n_top combos (lift x Jaccard diversity)
+    5. Grilles finales        - Monte Carlo weighted grilles with bonus numbers
 
     Returns dict: {companions, deep, combinations, reference, grilles}.
     """
