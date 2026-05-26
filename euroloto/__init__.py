@@ -147,8 +147,14 @@ def build_tirage(
             print(f"  Total : {len(df):,} tirages  ({d_min} -> {d_max})\n")
         sheets[sheet] = df
 
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+    with pd.ExcelWriter(
+        output, engine='openpyxl',
+        datetime_format='DD/MM/YYYY', date_format='DD/MM/YYYY',
+    ) as writer:
         for sheet, df in sheets.items():
+            # Convert datetime64 -> date so Excel shows DD/MM/YYYY without time
+            df = df.copy()
+            df['date_de_tirage'] = df['date_de_tirage'].dt.date
             df.to_excel(writer, sheet_name=sheet, index=False)
 
     if verbose:
@@ -212,8 +218,13 @@ def update_tirage(
             if verbose:
                 print(f"  -> {len(new_rows)} nouveau(x) tirage(s) ajoute(s).\n")
 
-    with pd.ExcelWriter(xlsx_path, engine='openpyxl') as writer:
+    with pd.ExcelWriter(
+        xlsx_path, engine='openpyxl',
+        datetime_format='DD/MM/YYYY', date_format='DD/MM/YYYY',
+    ) as writer:
         for sheet, df in updated.items():
+            df = df.copy()
+            df['date_de_tirage'] = pd.to_datetime(df['date_de_tirage']).dt.date
             df.to_excel(writer, sheet_name=sheet, index=False)
 
     if verbose:

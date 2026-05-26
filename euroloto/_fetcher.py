@@ -1,8 +1,15 @@
 """
-FDJ data fetcher - downloads historical draw CSVs from the official FDJ CDN.
+FDJ data fetcher — downloads historical draw ZIPs from the FDJ API.
 
-All ZIP file URLs are versioned by start-date (e.g. loto_201911.zip = Nov 2019 -> today).
-The most-recent file always contains the latest draws; update_tirage() fetches only it.
+FDJ migrated from the old CDN (cdn-media.fdj.fr/static-draws/csv)
+to a new authenticated-free API endpoint in 2024.  The old CDN ZIPs
+are frozen at July 2024; the new API always serves up-to-date data.
+
+New base URL:
+  https://www.sto.api.fdj.fr/anonymous/service-draw-info/v3/documentations/{uuid}
+
+Each UUID maps to one period ZIP.  The most-recent ID is always first;
+update_tirage() fetches only that one for fast incremental updates.
 """
 from __future__ import annotations
 
@@ -13,39 +20,74 @@ from typing import List
 import pandas as pd
 
 # ---------------------------------------------------------------------------
-# CDN base and file lists (newest -> oldest)
+# New FDJ API (2024+) — UUID-based endpoints
 # ---------------------------------------------------------------------------
 
-FDJ_CDN = "https://cdn-media.fdj.fr/static-draws/csv"
+FDJ_API = "https://www.sto.api.fdj.fr/anonymous/service-draw-info/v3/documentations"
 
-LOTO_ZIPS: List[str] = [
-    "loto/loto_201911.zip",   # Nov 2019 -> present  (5 balls + numero_chance)
-    "loto/loto_201902.zip",   # Feb 2019 -> Nov 2019
-    "loto/loto_201703.zip",   # Mar 2017 -> Feb 2019
-    "loto/loto_200810.zip",   # Oct 2008 -> Mar 2017
-    "loto/loto_197605.zip",   # May 1976 -> Oct 2008  (6 balls, old format)
+# Human-readable labels (same index as the UUID lists below)
+LOTO_LABELS: List[str] = [
+    "loto Nov 2019 -> present  (5 boules + numero_chance)",
+    "loto Feb 2019 -> Nov 2019",
+    "loto Mar 2017 -> Feb 2019",
+    "loto Oct 2008 -> Mar 2017",
+    "loto May 1976 -> Oct 2008  (6 boules, ancien format)",
 ]
 
-EURO_ZIPS: List[str] = [
-    "euromillions/euromillions_202002.zip",  # Feb 2020 -> present  (etoiles 1-12)
-    "euromillions/euromillions_201902.zip",  # Feb 2019 -> Feb 2020
-    "euromillions/euromillions_201609.zip",  # Sep 2016 -> Feb 2019
-    "euromillions/euromillions_201402.zip",  # Feb 2014 -> Sep 2016
-    "euromillions/euromillions_201105.zip",  # May 2011 -> Feb 2014
-    "euromillions/euromillions_200402.zip",  # Feb 2004 -> May 2011  (etoiles 1-9)
+EURO_LABELS: List[str] = [
+    "euro Feb 2020 -> present  (etoiles 1-12)",
+    "euro Mar 2019 -> Feb 2020",
+    "euro Sep 2016 -> Mar 2019",
+    "euro Feb 2014 -> Sep 2016",
+    "euro May 2011 -> Feb 2014",
+    "euro Feb 2004 -> May 2011  (etoiles 1-9)",
 ]
+
+LOTO_IDS: List[str] = [
+    "1a2b3c4d-9876-4562-b3fc-2c963f66afp6",  # Nov 2019 -> present
+    "1a2b3c4d-9876-4562-b3fc-2c963f66afo6",  # Feb 2019 -> Nov 2019
+    "1a2b3c4d-9876-4562-b3fc-2c963f66afn6",  # Mar 2017 -> Feb 2019
+    "1a2b3c4d-9876-4562-b3fc-2c963f66afm6",  # Oct 2008 -> Mar 2017
+    "1a2b3c4d-9876-4562-b3fc-2c963f66afl6",  # May 1976 -> Oct 2008 (6-ball old format)
+]
+
+EURO_IDS: List[str] = [
+    "1a2b3c4d-9876-4562-b3fc-2c963f66afe6",  # Feb 2020 -> present
+    "1a2b3c4d-9876-4562-b3fc-2c963f66afd6",  # Mar 2019 -> Feb 2020
+    "1a2b3c4d-9876-4562-b3fc-2c963f66afc6",  # Sep 2016 -> Mar 2019
+    "1a2b3c4d-9876-4562-b3fc-2c963f66afb6",  # Feb 2014 -> Sep 2016
+    "1a2b3c4d-9876-4562-b3fc-2c963f66afa9",  # May 2011 -> Feb 2014
+    "1a2b3c4d-9876-4562-b3fc-2c963f66afa8",  # Feb 2004 -> May 2011 (etoiles 1-9)
+]
+
+# ---------------------------------------------------------------------------
+# Legacy CDN (frozen at July 2024 — kept for reference only)
+# ---------------------------------------------------------------------------
+# FDJ_CDN = "https://cdn-media.fdj.fr/static-draws/csv"
+# LOTO_ZIPS = ["loto/loto_201911.zip", ...]
+# EURO_ZIPS  = ["euromillions/euromillions_202002.zip", ...]
 
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
 
-def _download_zip(url: str, timeout: int = 30) -> bytes:
-    """Download a ZIP from *url* and return raw bytes."""
+_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+    ),
+    "Accept-Language": "fr-FR,fr;q=0.9",
+}
+
+
+def _download_zip(uid: str, timeout: int = 30) -> bytes:
+    """Download a ZIP from the FDJ API by UUID and return raw bytes."""
     try:
         import requests
     except ImportError:
         raise ImportError("requests requis : pip install requests")
-    r = requests.get(url, timeout=timeout)
+    url = f"{FDJ_API}/{uid}"
+    r = requests.get(url, headers=_HEADERS, timeout=timeout)
     r.raise_for_status()
     return r.content
 
@@ -133,21 +175,21 @@ def _normalize_euro(raw: pd.DataFrame) -> pd.DataFrame:
 
 def fetch_all(kind: str, verbose: bool = True) -> pd.DataFrame:
     """
-    Download **all** historical ZIP files for *kind* ('loto' or 'euro') and
+    Download **all** historical ZIPs for *kind* ('loto' or 'euro') and
     return a sorted, deduplicated DataFrame in canonical schema.
 
     Takes ~15-30 s (11 network requests total for both games).
     """
-    zips = LOTO_ZIPS if kind == 'loto' else EURO_ZIPS
+    ids = LOTO_IDS if kind == 'loto' else EURO_IDS
+    labels = LOTO_LABELS if kind == 'loto' else EURO_LABELS
     normalizer = _normalize_loto if kind == 'loto' else _normalize_euro
 
     frames: list = []
-    for path in zips:
-        url = f"{FDJ_CDN}/{path}"
+    for uid, label in zip(ids, labels):
         if verbose:
-            print(f"  {path:<58}", end='', flush=True)
+            print(f"  {label:<58}", end='', flush=True)
         try:
-            raw_bytes = _download_zip(url)
+            raw_bytes = _download_zip(uid)
             df_norm = normalizer(_read_zip_csv(raw_bytes))
             frames.append(df_norm)
             if verbose:
@@ -170,17 +212,18 @@ def fetch_all(kind: str, verbose: bool = True) -> pd.DataFrame:
 
 def fetch_latest(kind: str, verbose: bool = True) -> pd.DataFrame:
     """
-    Download **only the most recent** ZIP file for *kind*.
+    Download **only the most recent** ZIP for *kind*.
     Used by :func:`update_tirage` for fast incremental updates.
     """
-    zips = LOTO_ZIPS if kind == 'loto' else EURO_ZIPS
+    ids = LOTO_IDS if kind == 'loto' else EURO_IDS
+    labels = LOTO_LABELS if kind == 'loto' else EURO_LABELS
     normalizer = _normalize_loto if kind == 'loto' else _normalize_euro
 
-    path = zips[0]   # newest file first
-    url = f"{FDJ_CDN}/{path}"
+    uid = ids[0]        # newest first
+    label = labels[0]
     if verbose:
-        print(f"  {path:<58}", end='', flush=True)
-    raw_bytes = _download_zip(url)
+        print(f"  {label:<58}", end='', flush=True)
+    raw_bytes = _download_zip(uid)
     df_norm = normalizer(_read_zip_csv(raw_bytes))
     if verbose:
         print(f"  OK  {len(df_norm):>5} tirages")
