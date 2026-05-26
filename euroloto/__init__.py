@@ -794,6 +794,360 @@ def plot_overdue(kind: str):
     return retard_bar(df, cfg['main_cols'], cfg)
 
 
+# =============================================================================
+#  Display helpers — rich notebook output  (show_* + pipeline)
+#  Each function displays results inline (IPython-friendly) and returns data.
+# =============================================================================
+
+def _disp(obj) -> None:
+    """IPython display() if available, else print."""
+    try:
+        from IPython.display import display
+        display(obj)
+    except Exception:
+        print(obj)
+
+
+def _show_fig(fig) -> None:
+    """Display a matplotlib figure then close it to prevent double rendering."""
+    import matplotlib.pyplot as plt
+    _disp(fig)
+    plt.close(fig)
+
+
+def _fmt_main(lst: List[int], fixed: List[int]) -> str:
+    """Format a combination: [xx] for fixed numbers, ' xx ' for others."""
+    return '  '.join(f'[{x:02d}]' if x in fixed else f' {x:02d} ' for x in lst)
+
+
+def _style_df(df: pd.DataFrame, gradients: dict = None, fmts: dict = None):
+    """Apply background_gradient and number formats to a pandas DataFrame."""
+    try:
+        st = df.style
+        for col, cmap in (gradients or {}).items():
+            if col in df.columns:
+                st = st.background_gradient(subset=[col], cmap=cmap)
+        if fmts:
+            valid = {k: v for k, v in fmts.items() if k in df.columns}
+            if valid:
+                st = st.format(valid)
+        return st
+    except Exception:
+        return df
+
+
+# ------------------------------------------------------------------
+
+def show_draws(kind: str, n: int = 8) -> pd.DataFrame:
+    """Show the n most recent draws for 'loto' or 'euro'."""
+    df, cfg = _s.require(kind)
+    tail = df.tail(n)
+    print(f"{cfg['name']} — {len(df)} tirages  (dernier: {df[cfg['date_col']].max().date()})")
+    _disp(tail)
+    return tail
+
+
+def show_frequency(kind: str, label: str = 'main') -> pd.DataFrame:
+    """Top-10 frequency table + bar chart.  label='main' | 'bonus'."""
+    df, cfg = _s.require(kind)
+    from euroloto._analyzer import frequency as _freq
+    cols = cfg['main_cols'] if label == 'main' else cfg['bonus_cols']
+    freq = _freq(df, cols).rename('apparitions')
+    tag  = 'boules principales' if label == 'main' else 'numeros bonus'
+    print(f"\n{cfg['name']} — top 10 {tag} :")
+    _disp(freq.nlargest(10).to_frame())
+    _show_fig(plot_frequency(kind, label))
+    return freq.to_frame()
+
+
+def show_hot_cold(kind: str, n_recent: int = 50) -> pd.DataFrame:
+    """Hot/cold analysis: top-5 hottest & coldest numbers + deviation chart."""
+    from euroloto._analyzer import hot_cold as _hc
+    df, cfg = _s.require(kind)
+    hc = _hc(df, cfg['main_cols'], n_recent)
+    show_cols = [c for c in ['total_pct', 'recent_pct', 'delta'] if c in hc.columns]
+    print(f"\n{cfg['name']} — chaud/froid  ({n_recent} derniers tirages)")
+    print("  >> CHAUDS :")
+    print(hc[hc['statut'] == 'chaud'].head(5)[show_cols].to_string())
+    print("  >> FROIDS :")
+    print(hc[hc['statut'] == 'froid'].tail(5)[show_cols].to_string())
+    _show_fig(plot_hot_cold(kind, n_recent))
+    return hc
+
+
+def show_cooccurrence(kind: str, top_n: int = 20, min_cooc: int = 0) -> None:
+    """Top-10 co-occurring pairs table + heatmap."""
+    _disp(top_pairs(kind, n=10))
+    _show_fig(plot_cooccurrence(kind, top_n, min_cooc))
+
+
+def show_stats(kind: str) -> dict:
+    """Chi2 + KS uniformity tests, sum stats, even/odd distribution."""
+    chi2r = chi2_test(kind)
+    ksr   = ks_test(kind)
+    ss    = sum_stats(kind)
+    eo    = even_odd(kind)
+    cfg   = _s.configs[kind]
+    print(f"\n{cfg['name']} — tests d'uniformite sur les boules principales")
+    print(f"  Chi2 : stat={chi2r['statistic']:.4f}  p={chi2r['pvalue']:.4f}"
+          f"  -> {'OK uniforme' if chi2r['is_uniform'] else 'NON uniforme (p<0.05)'}")
+    print(f"  KS   : stat={ksr['statistic']:.6f}  p={ksr['pvalue']:.4f}"
+          f"  -> {'OK uniforme' if ksr['is_uniform'] else 'NON uniforme (p<0.05)'}")
+    print(f"\nSomme des boules :")
+    _disp(ss.to_frame())
+    print(f"\nDistribution pair / impair :")
+    _disp(eo)
+    return {'chi2': chi2r, 'ks': ksr, 'sum_stats': ss, 'even_odd': eo}
+
+
+def show_sum(kind: str) -> pd.Series:
+    """Sum distribution histogram + descriptive statistics."""
+    _show_fig(plot_sum(kind))
+    return sum_stats(kind)
+
+
+def show_even_odd(kind: str) -> pd.DataFrame:
+    """Even/odd count distribution table."""
+    eo = even_odd(kind)
+    print(f"\n{_s.configs[kind]['name']} — distribution pair / impair :")
+    _disp(eo)
+    return eo
+
+
+def show_overdue(kind: str, n: int = 20) -> pd.Series:
+    """Top-n most overdue numbers + retard bar chart."""
+    od = overdue(kind)
+    print(f"\n{_s.configs[kind]['name']} — top {n} numeros en retard :")
+    _disp(od.head(n).rename('retard (tirages)').to_frame())
+    _show_fig(plot_overdue(kind))
+    return od
+
+
+def show_temporal(kind: str, top_n: int = 10) -> None:
+    """Normalized yearly frequency trend for the top_n most frequent numbers."""
+    _show_fig(plot_temporal(kind, top_n))
+
+
+def show_gaps(kind: str) -> None:
+    """Boxplot of inter-draw gaps per number."""
+    _show_fig(plot_gaps(kind))
+
+
+def show_companions(
+    fixed: List[int],
+    kind: str = 'euro',
+    n_top: int = 15,
+) -> pd.DataFrame:
+    """
+    Styled companions table (frequency + lift) + bar chart.
+    kind='all' crosses Loto + EuroMillions on numbers 1-49.
+    Returns the companion DataFrame.
+    """
+    from euroloto._analyzer import companions as _comp
+
+    fixed = sorted(fixed)
+
+    if kind == 'all':
+        comp = _companions_all(fixed, n_top)
+        print(f"\nCompagnons de {fixed} — Loto + EuroMillions combines (top {n_top}) :")
+        _disp(_style_df(comp, {'total': 'Blues'}, {'pct_%': '{:.1f}%'}))
+        _show_fig(plot_companions(fixed, kind='all', n_top=n_top))
+        return comp
+
+    df, cfg = _s.require(kind)
+    filtered, comp = _comp(df, cfg['main_cols'], fixed, n_top=n_top)
+    if comp.empty:
+        print(f"Aucun tirage contient simultanement {fixed} dans {cfg['name']}.")
+        return comp
+    print(f"\n{cfg['name']} — compagnons de {fixed}  ({len(filtered)} tirages, top {n_top}) :")
+    _disp(_style_df(
+        comp,
+        {'frequence': 'Blues', 'lift': 'RdYlGn'},
+        {'pct': '{:.1f}%', 'lift': '{:.2f}'},
+    ))
+    from euroloto._plots import companions_bar
+    _show_fig(companions_bar(filtered, comp, fixed, cfg))
+    return comp
+
+
+def show_combinations(
+    fixed: List[int],
+    kind: str = 'euro',
+    n_top: int = 10,
+    n_candidates: int = 35,
+) -> tuple:
+    """
+    Compute and display the N most probable & most diverse combinations
+    starting from a fixed pair of numbers.
+
+    Algorithm
+    ---------
+    1. Filter historical draws containing all fixed numbers.
+    2. Rank companion candidates by conditional frequency (top n_candidates).
+    3. Enumerate all C(n_candidates, n_to_fill) complete combinations.
+    4. Score each combination by **mean pairwise conditional lift**:
+         score = mean over all C(k,2) pairs (a,b) of P(a∩b|fixed) / (P(a|fixed)×P(b|fixed))
+    5. Select the top n_top using **greedy Jaccard diversity**:
+         - Each selected combo maximises its minimum Jaccard distance to already-selected
+           combos, so the returned set covers the probability landscape without near-duplicates.
+
+    Columns
+    -------
+    Score lift   : empirical association strength (higher = stronger co-occurrence pattern)
+    Diversite    : min Jaccard distance to nearest neighbour in the selected set
+                   0 = identical complement (clone)   |   1 = no common number besides fixed
+    Prob. (%)    : relative probability among all enumerated combinations
+
+    Returns (combos_df, reference_score)
+      reference_score = mean score over ALL C(n_candidates, n_to_fill) combinations
+                        — the random-baseline every selected combo must beat.
+    """
+    import itertools
+    from euroloto._analyzer import top_combinations as _tc
+    from euroloto._plots import combinations_histogram
+
+    fixed = sorted(fixed)
+    df, cfg = _s.require(kind)
+    combos, reference = _tc(df, cfg['main_cols'], fixed, n_top=n_top, n_candidates=n_candidates)
+
+    if combos.empty:
+        print(f"Pas assez de tirages contenant {fixed}.")
+        return combos, reference
+
+    n_to_fill = len(cfg['main_cols']) - len(fixed)
+    n_enum    = len(list(itertools.combinations(range(n_candidates), n_to_fill)))
+
+    print(f"\n{'='*60}")
+    print(f"  COMBINAISONS OPTIMALES  |  {kind.upper()}")
+    print(f"{'='*60}")
+    print(f"  Fixes     : {fixed}")
+    print(f"  Candidats : C({n_candidates},{n_to_fill}) = {n_enum:,} combinaisons evaluees")
+    print(f"  Reference : {reference:.4f}  (score moyen toutes combinaisons)")
+    print(f"  Retenues  : {n_top}  [lift max + diversite Jaccard maximale]")
+    print(f"  Diversite : Jaccard min vs. voisin  (0=clone, 0.4+=vraiment differentes)")
+    print()
+
+    has_div = 'diversite' in combos.columns
+    disp = pd.DataFrame({
+        '#': combos['rank'],
+        f'Combinaison {kind}  ([ ]=fixes)': combos['main'].apply(
+            lambda lst: _fmt_main(lst, fixed)
+        ),
+        'Score lift': combos['score'],
+        'Diversite':  combos['diversite'] if has_div else [pd.NA] * len(combos),
+        'Prob. (%)':  combos['prob_pct'],
+    }).set_index('#')
+
+    grads = {'Score lift': 'YlOrRd', 'Prob. (%)': 'Blues'}
+    fmts  = {'Score lift': '{:.4f}', 'Prob. (%)': '{:.5f}'}
+    if has_div:
+        grads['Diversite'] = 'Greens'
+        fmts['Diversite']  = '{:.3f}'
+
+    _disp(_style_df(disp, grads, fmts))
+    _show_fig(combinations_histogram(combos, reference, fixed, cfg))
+    return combos, reference
+
+
+def show_prediction(
+    fixed: Optional[List[int]] = None,
+    kind: str = 'euro',
+    n: int = 10,
+    alpha: float = 0.6,
+    seed: int = 42,
+) -> Union[List[dict], dict]:
+    """
+    Generate n grilles via Monte Carlo weighted sampling,
+    display as a styled table, and return results.
+    alpha=1.0 = pure frequency  |  alpha=0.0 = pure overdue (retard).
+    """
+    grilles = prediction(fixed=fixed, kind=kind, n=n, alpha=alpha, seed=seed)
+    fxd = sorted(fixed) if fixed else []
+
+    def _render(k: str, g_list: list) -> None:
+        cfg_k = _s.configs[k]
+        bl    = 'Etoiles' if k == 'euro' else 'Chance'
+        print(f"\n{cfg_k['name']} — {n} grilles | alpha={alpha} | fixes={fxd or 'aucun'}")
+        rows = [{
+            '#': i,
+            f'Combinaison {k}  ([ ]=fixes)': _fmt_main(sorted(g['main']), fxd),
+            bl: '  '.join(str(b) for b in g['bonus']),
+            'Score': round(g['score'], 3),
+        } for i, g in enumerate(g_list, 1)]
+        _disp(_style_df(
+            pd.DataFrame(rows).set_index('#'),
+            {'Score': 'YlOrRd'}, {'Score': '{:.3f}'},
+        ))
+
+    if kind == 'all':
+        _render('loto', grilles['loto'])
+        _render('euro', grilles['euro'])
+    else:
+        _render(kind, grilles)
+    return grilles
+
+
+def pipeline(
+    fixed: List[int],
+    kind: str = 'euro',
+    n_top: int = 10,
+    n_candidates: int = 35,
+    k_seeds: int = 3,
+    alpha: float = 0.6,
+    metric: str = 'lift',
+    seed: int = 42,
+) -> dict:
+    """
+    Full end-to-end prediction pipeline from a fixed pair of numbers.
+
+    Steps
+    -----
+    1. Compagnons             — frequency + conditional lift of each companion
+    2. Analyse profonde       — cascaded conditional co-occurrences (deep_companions)
+    3. Matrices d'affinite    — lift heatmaps at each cascade step
+    4. Combinaisons optimales — top n_top combos (lift x Jaccard diversity)
+    5. Grilles finales        — Monte Carlo weighted grilles with bonus numbers
+
+    Returns dict: {companions, deep, combinations, reference, grilles}.
+    """
+    fixed = sorted(fixed)
+    sep = '-' * 60
+    print(f"\n{'#'*60}")
+    print(f"  PIPELINE {kind.upper()}  |  fixes={fixed}")
+    print(f"  n_top={n_top}  n_cand={n_candidates}  k_seeds={k_seeds}  alpha={alpha}")
+    print(f"{'#'*60}")
+
+    print(f"\n{sep}\n  ETAPE 1 - Compagnons (frequence + lift)\n{sep}")
+    comp = show_companions(fixed, kind=kind, n_top=20)
+
+    print(f"\n{sep}\n  ETAPE 2 - Analyse profonde (k_seeds={k_seeds})\n{sep}")
+    deep = deep_companions(fixed, kind=kind, n_top=8, k_seeds=k_seeds)
+
+    print(f"\n{sep}\n  ETAPE 3 - Matrices d'affinite (metric={metric})\n{sep}")
+    figs = plot_deep_companions(fixed, kind=kind, n_top=12, min_affinity=1, metric=metric)
+    for fig in figs:
+        _show_fig(fig)
+
+    print(f"\n{sep}\n  ETAPE 4 - Combinaisons optimales (lift x Jaccard)\n{sep}")
+    combos, reference = show_combinations(
+        fixed, kind=kind, n_top=n_top, n_candidates=n_candidates
+    )
+
+    print(f"\n{sep}\n  ETAPE 5 - Grilles finales (Monte Carlo, alpha={alpha})\n{sep}")
+    grilles = show_prediction(fixed, kind=kind, n=n_top, alpha=alpha, seed=seed)
+
+    print(f"\n{'='*60}\n  PIPELINE TERMINE\n{'='*60}")
+    return {
+        'companions':   comp,
+        'deep':         deep,
+        'combinations': combos,
+        'reference':    reference,
+        'grilles':      grilles,
+    }
+
+
+# ------------------------------------------------------------------
+
 def plot_companions(fixed: List[int], kind: str = 'loto', n_top: int = 15):
     """
     Bar chart of companion frequencies.

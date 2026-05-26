@@ -413,6 +413,15 @@ def top_combinations(
 
     result = combos_df.loc[selected_idx, ['main', 'score', 'prob_pct']].copy()
     result.insert(0, 'rank', range(1, len(result) + 1))
-    result = result.reset_index(drop=True)
 
+    # Diversity metric: min Jaccard distance to nearest neighbour in the selected set
+    # 0 = identical complement (clone), 1 = no common number outside fixed
+    s_list = [set(r) for r in result['main']]
+    min_jacs = []
+    for i, s in enumerate(s_list):
+        others = [ss for j, ss in enumerate(s_list) if j != i]
+        min_jacs.append(round(min((_jaccard_dist(s, o) for o in others), default=1.0), 3))
+    result['diversite'] = min_jacs
+
+    result = result.reset_index(drop=True)
     return result, reference
